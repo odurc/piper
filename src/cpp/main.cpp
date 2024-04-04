@@ -32,6 +32,7 @@
 
 #include "json.hpp"
 #include "piper.hpp"
+#include "sockme.hpp"
 
 using namespace std;
 using json = nlohmann::json;
@@ -82,6 +83,9 @@ struct RunConfig {
   //   "output_file": str,        (optional)
   // }
   bool jsonInput = false;
+
+  // Read input from socket instead of stdin
+  bool socketInput = false;
 
   // Seconds of extra silence to insert after a single phoneme
   optional<std::map<piper::Phoneme, float>> phonemeSilenceSeconds;
@@ -226,9 +230,28 @@ int main(int argc, char *argv[]) {
     spdlog::info("Output directory: {}", runConfig.outputPath.value().string());
   }
 
+  // Create socket server
+  sockme::Server server(8080);
+  if (runConfig.socketInput) {
+    server.start();
+    spdlog::info("TCP Server started at 8080");
+    spdlog::info("Waiting for client connection");
+    server.accept();
+    spdlog::info("Connection accepted");
+  }
+
   string line;
   piper::SynthesisResult result;
-  while (getline(cin, line)) {
+  while (true) {
+    if (runConfig.socketInput) {
+      server.recv(&line);
+    } else {
+      getline(cin, line);
+    }
+
+    if (line.length() <= 0)
+      break;
+
     auto outputType = runConfig.outputType;
     auto speakerId = voice.synthesisConfig.speakerId;
     std::optional<filesystem::path> maybeOutputPath = runConfig.outputPath;
@@ -420,6 +443,9 @@ void printUsage(char *argv[]) {
   cerr << "   --output_raw                  output raw audio to stdout as it "
           "becomes available"
        << endl;
+  cerr << "   --socket_input                output raw audio to stdout as it "
+          "becomes available via socket (TCP port 8080)"
+       << endl;
   cerr << "   -s  NUM   --speaker     NUM   id of speaker (default: 0)" << endl;
   cerr << "   --noise_scale           NUM   generator noise (default: 0.667)"
        << endl;
@@ -483,6 +509,9 @@ void parseArgs(int argc, char *argv[], RunConfig &runConfig) {
       runConfig.outputPath = filesystem::path(argv[++i]);
     } else if (arg == "--output_raw" || arg == "--output-raw") {
       runConfig.outputType = OUTPUT_RAW;
+    } else if (arg == "--socket_input" || arg == "--socket-input") {
+      runConfig.outputType = OUTPUT_RAW;
+      runConfig.socketInput = true;
     } else if (arg == "-s" || arg == "--speaker") {
       ensureArg(argc, argv, i);
       runConfig.speakerId = (piper::SpeakerId)stol(argv[++i]);
